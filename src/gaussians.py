@@ -36,7 +36,9 @@ class GaussianScene:
 def _load_ply_numpy(path: str):
     plydata = PlyData.read(path)
 
-    if "chunk" in plydata:
+    element_names = {el.name for el in plydata.elements}
+
+    if "chunk" in element_names:
         c = plydata["chunk"]
         cn = set(c.data.dtype.names)
 
@@ -91,7 +93,7 @@ def _load_ply_numpy(path: str):
             b = 0.5 * (min_b + max_b)
             colors = np.stack([r, g, b], axis=-1)
 
-            if colors.max() > 1.0:  
+            if colors.max() > 1.0:  # вдруг 0..255
                 colors = colors / 255.0
             colors = np.clip(colors, 0.0, 1.0)
         else:
@@ -111,7 +113,7 @@ def _load_ply_numpy(path: str):
             colors.astype(np.float32),
         )
 
-    if "vertex" in plydata:
+    if "vertex" in element_names:
         v = plydata["vertex"]
         names = set(v.data.dtype.names)
 
@@ -162,8 +164,9 @@ def _load_ply_numpy(path: str):
 
     raise ValueError(
         f"Unsupported PLY layout in {path}. "
-        f"Available elements: {list(plydata.elements)}"
+        f"Available elements: {[el.name for el in plydata.elements]}"
     )
+
 
 
 
