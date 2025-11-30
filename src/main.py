@@ -8,7 +8,6 @@ from .gaussians import load_gaussian_scene
 from .explorer import SceneExplorer
 from .renderer import GsplatRenderer
 
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="ICV Assignment 4"
@@ -63,7 +62,6 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-
 def parse_resolution(res_str: str) -> (int, int):
     parts = res_str.lower().split("x")
     if len(parts) != 2:
@@ -72,6 +70,25 @@ def parse_resolution(res_str: str) -> (int, int):
     h = int(parts[1])
     return w, h
 
+def auto_configure_camera(scene, scene_cfg):
+    center = scene.center.cpu().numpy()
+    bbox_min = scene.bbox_min.cpu().numpy()
+    bbox_max = scene.bbox_max.cpu().numpy()
+
+    extent_x = bbox_max[0] - bbox_min[0]
+    extent_z = bbox_max[2] - bbox_min[2]
+    cam_y = bbox_min[1] + 2.0
+
+    if extent_z >= extent_x:
+        start = [center[0], cam_y, bbox_min[2] - 0.1 * extent_z]
+        end = [center[0], cam_y, bbox_max[2] + 0.1 * extent_z]
+    else:
+        start = [bbox_min[0] - 0.1 * extent_x, cam_y, center[2]]
+        end = [bbox_max[0] + 0.1 * extent_x, cam_y, center[2]]
+
+    scene_cfg["straight_path_waypoints_xyz"] = [start, end]
+    scene_cfg["straight_start_cam_y"] = cam_y
+    scene_cfg["normalize_scene"] = True
 
 def process_scene(
     scene_path: str,
@@ -86,18 +103,21 @@ def process_scene(
     print(f"\n=== Processing scene: {scene_path} ===")
     scene = load_gaussian_scene(scene_path, device=device)
 
+    # Fix camera logic to prevent black render
+    scene_cfg = {}
+    auto_configure_camera(scene, scene_cfg)
+
     explorer = SceneExplorer(scene)
     exploration_result = explorer.plan_panorama_tour(
         duration_sec=duration, fps=fps
     )
 
-    view_mats = exploration_result.view_mats  # [F, 4, 4]
+    view_mats = exploration_result.view_mats
 
     scene_name = os.path.splitext(os.path.basename(scene_path))[0]
     scene_output_dir = os.path.join(output_dir, scene_name)
     os.makedirs(scene_output_dir, exist_ok=True)
 
-    # Video 1: Comprehensive Panorama Tour (required)
     video_path = os.path.join(scene_output_dir, "panorama_tour.mp4")
 
     renderer = GsplatRenderer(
@@ -115,7 +135,6 @@ def process_scene(
         radius_clip=radius_clip,
     )
     print(f"[OK] Saved panorama tour to: {video_path}")
-
 
 def main():
     args = parse_args()
@@ -144,7 +163,6 @@ def main():
             device=device,
             radius_clip=args.radius_clip,
         )
-
 
 if __name__ == "__main__":
     main()
