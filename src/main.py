@@ -107,7 +107,8 @@ def process_scene(
     scene_cfg = {}
     auto_configure_camera(scene, scene_cfg)
 
-    explorer = SceneExplorer(scene)
+    explorer = SceneExplorer(scene, config=scene_cfg)
+
     exploration_result = explorer.plan_panorama_tour(
         duration_sec=duration, fps=fps
     )
