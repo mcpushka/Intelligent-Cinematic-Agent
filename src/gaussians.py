@@ -36,55 +36,6 @@ class GaussianScene:
 def _load_ply_numpy(path: str):
     plydata = PlyData.read(path)
 
-    if "vertex" in plydata:
-        v = plydata["vertex"]
-        names = set(v.data.dtype.names)
-
-        if {"x", "y", "z"}.issubset(names):
-            positions = np.stack(
-                [v["x"], v["y"], v["z"]], axis=-1
-            ).astype(np.float32)
-
-            # Scales
-            if {"scale_0", "scale_1", "scale_2"}.issubset(names):
-                scales = np.stack(
-                    [v["scale_0"], v["scale_1"], v["scale_2"]], axis=-1
-                ).astype(np.float32)
-                scales = np.exp(scales)
-            else:
-                scales = np.full_like(positions, 0.01, dtype=np.float32)
-
-            # Rotations
-            if {"rot_0", "rot_1", "rot_2", "rot_3"}.issubset(names):
-                quats = np.stack(
-                    [v["rot_0"], v["rot_1"], v["rot_2"], v["rot_3"]], axis=-1
-                ).astype(np.float32)
-            else:
-                quats = np.zeros((positions.shape[0], 4), dtype=np.float32)
-                quats[:, 0] = 1.0
-
-            # Colors from SH DC
-            if {"f_dc_0", "f_dc_1", "f_dc_2"}.issubset(names):
-                colors = 0.5 + SH_C0 * np.stack(
-                    [v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]], axis=-1
-                ).astype(np.float32)
-                colors = np.clip(colors, 0.0, 1.0)
-            elif {"red", "green", "blue"}.issubset(names):
-                colors = np.stack(
-                    [v["red"], v["green"], v["blue"]], axis=-1
-                ).astype(np.float32) / 255.0
-            else:
-                colors = np.ones_like(positions, dtype=np.float32)
-
-            # Opacity
-            if "opacity" in names:
-                opacity_raw = v["opacity"].astype(np.float32)
-                opacities = 1.0 / (1.0 + np.exp(-opacity_raw))
-            else:
-                opacities = np.ones((positions.shape[0],), dtype=np.float32)
-
-            return positions, quats, scales, opacities, colors
-
     if "chunk" in plydata:
         c = plydata["chunk"]
         cn = set(c.data.dtype.names)
@@ -140,7 +91,7 @@ def _load_ply_numpy(path: str):
             b = 0.5 * (min_b + max_b)
             colors = np.stack([r, g, b], axis=-1)
 
-            if colors.max() > 1.0:
+            if colors.max() > 1.0:  
                 colors = colors / 255.0
             colors = np.clip(colors, 0.0, 1.0)
         else:
@@ -152,12 +103,68 @@ def _load_ply_numpy(path: str):
         quats = np.zeros((n, 4), dtype=np.float32)
         quats[:, 0] = 1.0  # w=1, x=y=z=0 (identity rotation)
 
-        return positions.astype(np.float32), quats, scales.astype(np.float32), opacities, colors.astype(np.float32)
+        return (
+            positions.astype(np.float32),
+            quats,
+            scales.astype(np.float32),
+            opacities,
+            colors.astype(np.float32),
+        )
+
+    if "vertex" in plydata:
+        v = plydata["vertex"]
+        names = set(v.data.dtype.names)
+
+        if {"x", "y", "z"}.issubset(names):
+            positions = np.stack(
+                [v["x"], v["y"], v["z"]], axis=-1
+            ).astype(np.float32)
+
+            # Scales
+            if {"scale_0", "scale_1", "scale_2"}.issubset(names):
+                scales = np.stack(
+                    [v["scale_0"], v["scale_1"], v["scale_2"]], axis=-1
+                ).astype(np.float32)
+                scales = np.exp(scales)
+            else:
+                scales = np.full_like(positions, 0.01, dtype=np.float32)
+
+            # Rotations
+            if {"rot_0", "rot_1", "rot_2", "rot_3"}.issubset(names):
+                quats = np.stack(
+                    [v["rot_0"], v["rot_1"], v["rot_2"], v["rot_3"]], axis=-1
+                ).astype(np.float32)
+            else:
+                quats = np.zeros((positions.shape[0], 4), dtype=np.float32)
+                quats[:, 0] = 1.0
+
+            # Colors
+            if {"f_dc_0", "f_dc_1", "f_dc_2"}.issubset(names):
+                colors = 0.5 + SH_C0 * np.stack(
+                    [v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]], axis=-1
+                ).astype(np.float32)
+                colors = np.clip(colors, 0.0, 1.0)
+            elif {"red", "green", "blue"}.issubset(names):
+                colors = np.stack(
+                    [v["red"], v["green"], v["blue"]], axis=-1
+                ).astype(np.float32) / 255.0
+            else:
+                colors = np.ones_like(positions, dtype=np.float32)
+
+            # Opacity
+            if "opacity" in names:
+                opacity_raw = v["opacity"].astype(np.float32)
+                opacities = 1.0 / (1.0 + np.exp(-opacity_raw))
+            else:
+                opacities = np.ones((positions.shape[0],), dtype=np.float32)
+
+            return positions, quats, scales, opacities, colors
 
     raise ValueError(
         f"Unsupported PLY layout in {path}. "
         f"Available elements: {list(plydata.elements)}"
     )
+
 
 
 def load_gaussian_scene(path: str, device: Optional[str] = None) -> GaussianScene:
