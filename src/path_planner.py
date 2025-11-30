@@ -6,32 +6,30 @@ import torch
 from .gaussians import GaussianScene
 
 
-def look_at(eye: torch.Tensor,
-            target: torch.Tensor,
-            up: torch.Tensor) -> torch.Tensor:
-    """Build a 4x4 world-to-camera matrix (view matrix) from eye, target, up.
+def look_at(eye: torch.Tensor, target: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
+    """Build a standard right-handed look-at view matrix.
 
-    The result is standard pinhole view: R|t where camera looks along -Z.
+    eye, target, up are 3D vectors on the same device.
+    Returns 4x4 matrix that transforms world -> camera coordinates.
     """
-    # Ensure float32 tensors on same device
-    eye = eye.to(dtype=torch.float32)
-    target = target.to(dtype=torch.float32)
-    up = up.to(dtype=torch.float32)
-
+    # Forward axis (camera looks along -z)
     z_axis = eye - target
     z_axis = z_axis / (torch.norm(z_axis) + 1e-8)
 
-    x_axis = torch.cross(up, z_axis)
+    # Right axis
+    # IMPORTANT: specify dim=0 to avoid deprecation warning.
+    x_axis = torch.cross(up, z_axis, dim=0)
     x_axis = x_axis / (torch.norm(x_axis) + 1e-8)
 
-    y_axis = torch.cross(z_axis, x_axis)
+    # True up axis
+    y_axis = torch.cross(z_axis, x_axis, dim=0)
 
-    R = torch.stack([x_axis, y_axis, z_axis], dim=0)  # [3, 3]
-    t = -R @ eye.view(3, 1)                           # [3, 1]
+    R = torch.stack([x_axis, y_axis, z_axis], dim=0)  # 3x3
+    t = -R @ eye
 
-    view = torch.eye(4, device=eye.device, dtype=torch.float32)
+    view = torch.eye(4, device=eye.device, dtype=eye.dtype)
     view[:3, :3] = R
-    view[:3, 3] = t.squeeze(-1)
+    view[:3, 3] = t
     return view
 
 
