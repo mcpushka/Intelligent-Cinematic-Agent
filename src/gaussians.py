@@ -12,10 +12,10 @@ SH_C0 = 0.28209479177387814  # constant used for SH -> RGB
 class GaussianScene:
     """Container for a Gaussian Splat scene in torch tensors."""
     means: torch.Tensor      # [N, 3]
-    quats: torch.Tensor      # [N, 4]  # (w, x, y, z)
+    quats: torch.Tensor      # [N, 4]  # wxyz
     scales: torch.Tensor     # [N, 3]
     opacities: torch.Tensor  # [N]
-    colors: torch.Tensor     # [N, 3], RGB in [0, 1]
+    colors: torch.Tensor     # [N, 3], RGB in [0,1]
 
     bbox_min: torch.Tensor   # [3]
     bbox_max: torch.Tensor   # [3]
@@ -32,18 +32,95 @@ class GaussianScene:
         return xy_extent < 100.0 and z_extent < 20.0
 
 
-def _load_ply_numpy(path: str):
-    """Load Gaussian-splat PLY file into numpy arrays.
+def _clean_gaussians(
+    positions: np.ndarray,
+    quats: np.ndarray,
+    scales: np.ndarray,
+    opacities: np.ndarray,
+    colors: np.ndarray,
+    max_norm_factor: float = 100.0,
+):
+    """
+    Remove NaNs / Infs and extreme outliers in position norm.
 
-    Supports two formats:
-      1) SuperSplat PLY with `element chunk` (min/max bounds).
-      2) Standard 3DGS-like PLY with `element vertex` and x,y,z,...
+    Parameters
+    ----------
+    max_norm_factor : float
+        Threshold multiplier relative to median norm. Everything with
+        ||x|| > max_norm_factor * median_norm is discarded.
+    """
+    # Compute position norms
+    norms = np.linalg.norm(positions, axis=-1)
+
+    # Finite mask for norms and positions
+    finite_mask = np.isfinite(norms)
+    finite_mask &= np.isfinite(positions).all(axis=-1)
+    finite_mask &= np.isfinite(scales).all(axis=-1)
+    finite_mask &= np.isfinite(colors).all(axis=-1)
+
+    if not finite_mask.any():
+        raise ValueError("All Gaussian chunks/vertices are non-finite, cannot build scene.")
+
+    finite_norms = norms[finite_mask]
+    median_norm = float(np.median(finite_norms))
+    # If median is extremely small, fall back to simple finite mask
+    if median_norm < 1e-6:
+        mask = finite_mask
+    else:
+        max_norm = median_norm * max_norm_factor
+        mask = finite_mask & (norms < max_norm)
+
+    if not mask.any():
+        # As a last resort, use pure finite mask
+        mask = finite_mask
+
+    positions = positions[mask]
+    quats = quats[mask]
+    scales = scales[mask]
+    opacities = opacities[mask]
+    colors = colors[mask]
+
+    return positions, quats, scales, opacities, colors
+
+
+def _load_ply_numpy(path: str):
+    """
+    Load Gaussian-splat PLY file into numpy arrays.
+
+    Supports two layouts:
+
+    1) SuperSplat compressed layout:
+       - element chunk:
+            min_x, min_y, min_z
+            max_x, max_y, max_z
+            min_scale_x, min_scale_y, min_scale_z
+            max_scale_x, max_scale_y, max_scale_z
+            min_r, min_g, min_b
+            max_r, max_g, max_b
+       - element vertex:
+            packed_position, packed_rotation, packed_scale, packed_color
+         (we ignore packed_* for now and approximate per-chunk Gaussians)
+
+    2) "Classic" Gaussian layout with explicit vertex fields:
+       - element vertex:
+            x, y, z
+            scale_0, scale_1, scale_2
+            rot_0..rot_3
+            f_dc_0..f_dc_2 or red, green, blue
+            opacity (logit)
+
+    Returns
+    -------
+    positions : (N,3) float32
+    quats     : (N,4) float32
+    scales    : (N,3) float32
+    opacities : (N,)  float32
+    colors    : (N,3) float32
     """
     plydata = PlyData.read(path)
-    element_names = {el.name for el in plydata.elements}
 
-    # ---------- CASE 1: SuperSplat PLY with 'chunk' element ----------
-    if "chunk" in element_names:
+    # ---- 1) SuperSplat-style 'chunk' layout ----
+    if "chunk" in plydata:
         c = plydata["chunk"]
         cn = set(c.data.dtype.names)
 
@@ -58,7 +135,7 @@ def _load_ply_numpy(path: str):
                 f"SuperSplat 'chunk' element missing fields, got {cn}"
             )
 
-        # Positions: center of each chunk
+        # Axis-aligned bounding boxes
         min_x = c["min_x"].astype(np.float32)
         min_y = c["min_y"].astype(np.float32)
         min_z = c["min_z"].astype(np.float32)
@@ -71,7 +148,7 @@ def _load_ply_numpy(path: str):
         z = 0.5 * (min_z + max_z)
         positions = np.stack([x, y, z], axis=-1)
 
-        # Scales: average of min/max scales
+        # Average scales inside the chunk
         min_sx = c["min_scale_x"].astype(np.float32)
         min_sy = c["min_scale_y"].astype(np.float32)
         min_sz = c["min_scale_z"].astype(np.float32)
@@ -84,7 +161,7 @@ def _load_ply_numpy(path: str):
         sz = 0.5 * (min_sz + max_sz)
         scales = np.stack([sx, sy, sz], axis=-1)
 
-        # Colors: average of min/max rgb if present, otherwise white
+        # Colors: average min/max RGB
         if {
             "min_r", "min_g", "min_b",
             "max_r", "max_g", "max_b",
@@ -101,7 +178,7 @@ def _load_ply_numpy(path: str):
             b = 0.5 * (min_b + max_b)
             colors = np.stack([r, g, b], axis=-1)
 
-            # If colors look like 0..255, normalize to 0..1
+            # Normalize to [0,1] if needed
             if colors.max() > 1.0:
                 colors = colors / 255.0
             colors = np.clip(colors, 0.0, 1.0)
@@ -109,26 +186,28 @@ def _load_ply_numpy(path: str):
             colors = np.ones_like(positions, dtype=np.float32)
 
         n = positions.shape[0]
-        # IMPORTANT: make all splats opaque so they are visible
         opacities = np.ones((n,), dtype=np.float32)
 
-        # Identity quaternion for all chunks (no rotation)
+        # Identity quaternions
         quats = np.zeros((n, 4), dtype=np.float32)
         quats[:, 0] = 1.0  # w=1, x=y=z=0
 
-        # Small safety clamp on scales (avoid zero)
-        scales = np.clip(scales, 1e-3, None)
+        # Robust cleaning: drop NaNs / Infs / extreme outliers
+        positions, quats, scales, opacities, colors = _clean_gaussians(
+            positions, quats, scales, opacities, colors,
+            max_norm_factor=100.0,
+        )
 
         return (
             positions.astype(np.float32),
-            quats,
+            quats.astype(np.float32),
             scales.astype(np.float32),
-            opacities,
+            opacities.astype(np.float32),
             colors.astype(np.float32),
         )
 
-    # ---------- CASE 2: Standard 3DGS-like PLY with 'vertex' ----------
-    if "vertex" in element_names:
+    # ---- 2) Classic explicit-vertex layout ----
+    if "vertex" in plydata:
         v = plydata["vertex"]
         names = set(v.data.dtype.names)
 
@@ -137,13 +216,14 @@ def _load_ply_numpy(path: str):
                 [v["x"], v["y"], v["z"]], axis=-1
             ).astype(np.float32)
 
-            # Scales: either explicit log-scales or small isotropic scale
+            # Scales: stored as log-scales in many 3DGS implementations
             if {"scale_0", "scale_1", "scale_2"}.issubset(names):
                 scales = np.stack(
                     [v["scale_0"], v["scale_1"], v["scale_2"]], axis=-1
                 ).astype(np.float32)
                 scales = np.exp(scales)
             else:
+                # Fallback: small isotropic scales
                 scales = np.full_like(positions, 0.01, dtype=np.float32)
 
             # Rotations: quaternion wxyz
@@ -155,7 +235,7 @@ def _load_ply_numpy(path: str):
                 quats = np.zeros((positions.shape[0], 4), dtype=np.float32)
                 quats[:, 0] = 1.0
 
-            # Colors: first try SH DC, then RGB, otherwise white
+            # Colors: SH DC term or direct RGB
             if {"f_dc_0", "f_dc_1", "f_dc_2"}.issubset(names):
                 colors = 0.5 + SH_C0 * np.stack(
                     [v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]], axis=-1
@@ -164,26 +244,35 @@ def _load_ply_numpy(path: str):
             elif {"red", "green", "blue"}.issubset(names):
                 colors = np.stack(
                     [v["red"], v["green"], v["blue"]], axis=-1
-                ).astype(np.float32)
-                colors = colors / 255.0
+                ).astype(np.float32) / 255.0
             else:
                 colors = np.ones_like(positions, dtype=np.float32)
 
-            # IMPORTANT: ignore PLY opacity and make all splats visible
-            # If original PLY has opacity field with weird scale, using it
-            # can easily make everything fully transparent. For the assignment
-            # it is safer to just render fully opaque gaussians.
-            opacities = np.ones((positions.shape[0],), dtype=np.float32)
+            # Opacity: from logit if present, otherwise 1
+            if "opacity" in names:
+                opacity_raw = v["opacity"].astype(np.float32)
+                opacities = 1.0 / (1.0 + np.exp(-opacity_raw))
+            else:
+                opacities = np.ones((positions.shape[0],), dtype=np.float32)
 
-            # Safety clamp on scales (avoid extremely tiny values)
-            scales = np.clip(scales, 1e-3, None)
+            # Clean as well (just in case)
+            positions, quats, scales, opacities, colors = _clean_gaussians(
+                positions, quats, scales, opacities, colors,
+                max_norm_factor=100.0,
+            )
 
-            return positions, quats, scales, opacities, colors
+            return (
+                positions.astype(np.float32),
+                quats.astype(np.float32),
+                scales.astype(np.float32),
+                opacities.astype(np.float32),
+                colors.astype(np.float32),
+            )
 
-    # ---------- Unsupported layout ----------
+    # ---- Unsupported layout ----
     raise ValueError(
         f"Unsupported PLY layout in {path}. "
-        f"Available elements: {[el.name for el in plydata.elements]}"
+        f"Available elements: {list(plydata.elements)}"
     )
 
 
@@ -199,14 +288,6 @@ def load_gaussian_scene(path: str, device: Optional[str] = None) -> GaussianScen
     scales_t = torch.from_numpy(scales).to(device)
     opacities_t = torch.from_numpy(opacities).to(device)
     colors_t = torch.from_numpy(colors).to(device)
-
-    # Make sure everything is clearly visible:
-    # 1) boost gaussian sizes a bit
-    scale_boost = 3.0  # tune this if you want thicker / thinner splats
-    scales_t = scales_t * scale_boost
-
-    # 2) clamp opacities to a safe range (even if someone changes _load_ply_numpy)
-    opacities_t = torch.clamp(opacities_t, min=0.3, max=1.0)
 
     bbox_min = means_t.min(dim=0).values
     bbox_max = means_t.max(dim=0).values
