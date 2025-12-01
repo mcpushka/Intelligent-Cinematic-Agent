@@ -231,15 +231,15 @@ def build_camera_path(
         positions.append(p)
     positions = torch.stack(positions, dim=0)  # [F, 3]
 
-    # 6) Build view matrices: look in the direction of motion, simple "indoor" feeling.
+    # 6) Build view matrices.
+    #    Чтобы гарантировать, что камера всегда "видит" сцену и кадр не будет
+    #    чёрным, смотрим в центр сцены, а не строго вперёд по траектории.
     up = torch.tensor([0.0, 1.0, 0.0], device=device)
+    center = scene.center
     view_mats: List[torch.Tensor] = []
     for i in range(total_frames):
         eye = positions[i]
-        if i < total_frames - 1:
-            target = positions[i + 1]
-        else:
-            target = positions[i]
+        target = center
         view_mats.append(look_at(eye, target, up))
 
     return torch.stack(view_mats, dim=0)
