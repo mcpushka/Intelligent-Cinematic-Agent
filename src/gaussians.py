@@ -25,19 +25,33 @@ def load_gaussian_scene(path: str, device: str = "cuda") -> GaussianScene:
     """
     ply = PlyData.read(path)
     
+    # Debug: print available elements and their fields
+    print(f"[INFO] PLY elements: {list(ply.elements)}")
+    
     # Try standard Gaussian Splatting format first
     if "vertex" in ply:
         vertex_data = ply["vertex"].data
+        available_fields = vertex_data.dtype.names
+        print(f"[INFO] Available vertex fields: {available_fields}")
         
-        # Extract positions
-        positions = torch.stack([
-            torch.tensor(vertex_data["x"], dtype=torch.float32),
-            torch.tensor(vertex_data["y"], dtype=torch.float32),
-            torch.tensor(vertex_data["z"], dtype=torch.float32),
-        ], dim=1).to(device)
+        # Extract positions - try different field name variations
+        if "x" in available_fields and "y" in available_fields and "z" in available_fields:
+            positions = torch.stack([
+                torch.tensor(vertex_data["x"], dtype=torch.float32),
+                torch.tensor(vertex_data["y"], dtype=torch.float32),
+                torch.tensor(vertex_data["z"], dtype=torch.float32),
+            ], dim=1).to(device)
+        elif "X" in available_fields and "Y" in available_fields and "Z" in available_fields:
+            positions = torch.stack([
+                torch.tensor(vertex_data["X"], dtype=torch.float32),
+                torch.tensor(vertex_data["Y"], dtype=torch.float32),
+                torch.tensor(vertex_data["Z"], dtype=torch.float32),
+            ], dim=1).to(device)
+        else:
+            raise ValueError(f"Could not find position fields (x,y,z or X,Y,Z) in PLY. Available: {available_fields}")
         
         # Extract scales (log scale, need to exp)
-        if "scale_0" in vertex_data.dtype.names:
+        if "scale_0" in available_fields:
             scales = torch.stack([
                 torch.tensor(vertex_data["scale_0"], dtype=torch.float32),
                 torch.tensor(vertex_data["scale_1"], dtype=torch.float32),
@@ -46,10 +60,11 @@ def load_gaussian_scene(path: str, device: str = "cuda") -> GaussianScene:
             scales = torch.exp(scales)  # Convert from log scale
         else:
             # Fallback: use small default scale
+            print(f"[WARNING] No scale fields found, using default scale")
             scales = torch.ones((len(positions), 3), dtype=torch.float32, device=device) * 0.01
         
         # Extract rotations (quaternions from rot_0, rot_1, rot_2, rot_3)
-        if "rot_0" in vertex_data.dtype.names:
+        if "rot_0" in available_fields:
             quats = torch.stack([
                 torch.tensor(vertex_data["rot_0"], dtype=torch.float32),
                 torch.tensor(vertex_data["rot_1"], dtype=torch.float32),
@@ -61,18 +76,20 @@ def load_gaussian_scene(path: str, device: str = "cuda") -> GaussianScene:
             quats = quats / quat_norm
         else:
             # Identity quaternion (x, y, z, w) format
+            print(f"[WARNING] No rotation fields found, using identity quaternions")
             quats = torch.zeros((len(positions), 4), dtype=torch.float32, device=device)
             quats[:, 3] = 1.0  # w = 1
         
         # Extract opacities (sigmoid activation)
-        if "opacity" in vertex_data.dtype.names:
+        if "opacity" in available_fields:
             opacities = torch.tensor(vertex_data["opacity"], dtype=torch.float32).to(device)
             opacities = torch.sigmoid(opacities)  # Convert from logit
         else:
+            print(f"[WARNING] No opacity field found, using default opacity 0.9")
             opacities = torch.ones(len(positions), dtype=torch.float32, device=device) * 0.9
         
         # Extract colors (spherical harmonics or RGB)
-        if "f_dc_0" in vertex_data.dtype.names:
+        if "f_dc_0" in available_fields:
             # Spherical harmonics - use DC component (first 3 values)
             colors = torch.stack([
                 torch.tensor(vertex_data["f_dc_0"], dtype=torch.float32),
@@ -81,7 +98,7 @@ def load_gaussian_scene(path: str, device: str = "cuda") -> GaussianScene:
             ], dim=1).to(device)
             # Apply sigmoid and scale to [0, 1]
             colors = torch.sigmoid(colors)
-        elif "red" in vertex_data.dtype.names:
+        elif "red" in available_fields:
             # Direct RGB values
             colors = torch.stack([
                 torch.tensor(vertex_data["red"], dtype=torch.float32),
@@ -94,6 +111,7 @@ def load_gaussian_scene(path: str, device: str = "cuda") -> GaussianScene:
             colors = colors.clamp(0.0, 1.0)
         else:
             # Default white color
+            print(f"[WARNING] No color fields found, using default white color")
             colors = torch.ones((len(positions), 3), dtype=torch.float32, device=device)
     
     # Try custom 'chunk' format
