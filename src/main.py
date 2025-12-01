@@ -1,6 +1,7 @@
 import argparse
 import os
 from typing import List
+from typing import Tuple
 
 import torch
 
@@ -62,7 +63,7 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-def parse_resolution(res_str: str) -> (int, int):
+def parse_resolution(res_str: str) -> Tuple[int, int]:
     parts = res_str.lower().split("x")
     if len(parts) != 2:
         raise ValueError(f"Invalid resolution format: {res_str}")
@@ -89,6 +90,7 @@ def auto_configure_camera(scene, scene_cfg):
     scene_cfg["straight_path_waypoints_xyz"] = [start, end]
     scene_cfg["straight_start_cam_y"] = cam_y
     scene_cfg["normalize_scene"] = True
+    scene_cfg["random_seed"] = 42
 
 def process_scene(
     scene_path: str,

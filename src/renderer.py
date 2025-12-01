@@ -127,3 +127,5 @@ class GsplatRenderer:
                 writer.append_data(frame)
 
         writer.close()
+        print(f"[✓] Finished rendering {F} frames to {out_path}")
+

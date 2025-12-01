@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from typing import Dict, Any, Optional
-
 import torch
 
 from .gaussians import GaussianScene
@@ -22,15 +21,17 @@ class SceneExplorer:
         scene: GaussianScene,
         normalize: bool = False,
         cam_y: Optional[float] = None,
-        seed: int = 42,
+        seed: int = 42
     ):
         # Optional normalization (in-place)
         if normalize:
             center = scene.center
             radius = scene.radius
+
             scene.means = (scene.means - center) / radius
             scene.bbox_min = (scene.bbox_min - center) / radius
             scene.bbox_max = (scene.bbox_max - center) / radius
+
             scene.center = (scene.bbox_min + scene.bbox_max) * 0.5
             scene.radius = torch.norm(scene.bbox_max - scene.bbox_min) * 0.5
 
@@ -42,7 +43,7 @@ class SceneExplorer:
         self,
         duration_sec: float,
         fps: int = 24,
-        n_keyframes: int = 120,
+        n_keyframes: int = 120
     ) -> ExplorationResult:
         """Plan a generic 360° panorama tour."""
         view_mats = build_camera_path(
@@ -54,12 +55,11 @@ class SceneExplorer:
             seed=self.seed,
         )
 
-        metadata: Dict[str, Any] = {
-            "num_frames": view_mats.shape[0],
+        metadata = {
             "fps": fps,
             "duration_sec": duration_sec,
-            "is_indoor": self.scene.is_indoor,
+            "num_frames": view_mats.shape[0],
             "cam_y": self.cam_y,
-            "normalized": True if self.cam_y else False,
         }
+
         return ExplorationResult(view_mats=view_mats, metadata=metadata)
