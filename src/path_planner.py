@@ -61,15 +61,16 @@ def _build_occupancy_grid(
         device=device,
     )
 
-    # Mark occupied cells around each Gaussian mean.
-    for p in scene.means:
-        local = (p - grid_min) / cell_size
-        cx, cy, cz = local.long()
-        rad_cells = max(1, int(influence_radius / float(cell_size)))
-        for ix in range(max(0, cx - rad_cells), min(grid_resolution, cx + rad_cells + 1)):
-            for iy in range(max(0, cy - rad_cells), min(grid_resolution, cy + rad_cells + 1)):
-                for iz in range(max(0, cz - rad_cells), min(grid_resolution, cz + rad_cells + 1)):
-                    occ_grid[ix, iy, iz] = True
+    # Vectorized marking of occupied cells (one cell per Gaussian mean).
+    # This avoids a very slow Python loop over all points and keeps path
+    # planning fast even for large scenes.
+    local = (scene.means - grid_min) / cell_size  # [N, 3] in grid coords
+    idx = local.long()
+    # Clamp indices to valid range.
+    idx = torch.clamp(idx, 0, grid_resolution - 1)
+    if idx.numel() > 0:
+        x, y, z = idx.unbind(dim=1)
+        occ_grid[x, y, z] = True
 
     return occ_grid, grid_min, float(cell_size)
 
