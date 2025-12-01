@@ -181,21 +181,11 @@ def load_gaussian_scene(path: str, device: str = "cuda") -> GaussianScene:
     print(f"[INFO] PLY elements: {list(ply.elements)}")
     
     # Check for packed format with chunk metadata (SuperSplat format)
-    if "chunk" in ply and "vertex" in ply:
-        vertex_data = ply["vertex"].data
+    # NOTE: Using chunk-only format for stability and speed on limited GPU memory
+    if "chunk" in ply:
         chunk_data = ply["chunk"].data
-        
-        if "packed_position" in vertex_data.dtype.names:
-            print(f"[INFO] Using packed SuperSplat format with {len(vertex_data)} gaussians and {len(chunk_data)} chunks")
-            
-            # Unpack the data using chunk metadata
-            positions, scales, colors, quats, opacities = _unpack_supersplat_data(
-                vertex_data, chunk_data, device
-            )
-        else:
-            # Fallback to chunk-only format
-            print(f"[INFO] Using 'chunk' format with {len(chunk_data)} chunks")
-            positions, scales, colors, quats, opacities = _load_chunk_format(chunk_data, device)
+        print(f"[INFO] Using 'chunk' format with {len(chunk_data)} chunks (faster, more stable)")
+        positions, scales, colors, quats, opacities = _load_chunk_format(chunk_data, device)
     
     # Try 'chunk' format only
     elif "chunk" in ply:
