@@ -83,7 +83,7 @@ def resample_catmull_rom(
         )
 
     samples = []
-    for u in torch.linspace(0, K, num_samples, device=device):
+    for u in torch.linspace(0, K - 1, num_samples, device=device):
         i = int(torch.floor(u).item())
         t = u - i
         p0 = extended[i + 0]
@@ -91,6 +91,7 @@ def resample_catmull_rom(
         p2 = extended[i + 2]
         p3 = extended[i + 3]
         samples.append(catmull_rom(p0, p1, p2, p3, t))
+
 
     return torch.stack(samples)
 
