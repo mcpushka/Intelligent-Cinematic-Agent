@@ -142,7 +142,7 @@ def process_scene(
         view_mats=view_mats,
         out_path=video_path,
         fps=fps,
-        batch_size=8,
+        batch_size=1,  # Reduced batch size to avoid OOM on T4
         radius_clip=radius_clip,
     )
     print(f"[OK] Saved panorama tour to: {video_path}")

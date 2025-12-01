@@ -3,7 +3,7 @@ import torch
 from plyfile import PlyData
 
 
-def _unpack_supersplat_data(vertex_data, chunk_data, device, max_gaussians=500000):
+def _unpack_supersplat_data(vertex_data, chunk_data, device, max_gaussians=200000):
     """Unpack SuperSplat packed format using chunk metadata for ranges.
     
     Args:
