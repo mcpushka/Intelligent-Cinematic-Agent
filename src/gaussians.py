@@ -3,6 +3,141 @@ import torch
 from plyfile import PlyData
 
 
+def _unpack_supersplat_data(vertex_data, chunk_data, device):
+    """Unpack SuperSplat packed format using chunk metadata for ranges."""
+    n_gaussians = len(vertex_data)
+    n_chunks = len(chunk_data)
+    
+    # Get packed data as uint32
+    packed_pos = np.array(vertex_data["packed_position"], dtype=np.uint32)
+    packed_rot = np.array(vertex_data["packed_rotation"], dtype=np.uint32)
+    packed_scale = np.array(vertex_data["packed_scale"], dtype=np.uint32)
+    packed_color = np.array(vertex_data["packed_color"], dtype=np.uint32)
+    
+    # Determine which chunk each gaussian belongs to
+    gaussians_per_chunk = n_gaussians // n_chunks
+    chunk_indices = np.repeat(np.arange(n_chunks), gaussians_per_chunk)
+    if len(chunk_indices) < n_gaussians:
+        chunk_indices = np.concatenate([chunk_indices, np.full(n_gaussians - len(chunk_indices), n_chunks - 1)])
+    
+    # Build chunk bounds arrays
+    chunk_min_x = np.array([c["min_x"] for c in chunk_data], dtype=np.float32)
+    chunk_max_x = np.array([c["max_x"] for c in chunk_data], dtype=np.float32)
+    chunk_min_y = np.array([c["min_y"] for c in chunk_data], dtype=np.float32)
+    chunk_max_y = np.array([c["max_y"] for c in chunk_data], dtype=np.float32)
+    chunk_min_z = np.array([c["min_z"] for c in chunk_data], dtype=np.float32)
+    chunk_max_z = np.array([c["max_z"] for c in chunk_data], dtype=np.float32)
+    
+    chunk_min_scale_x = np.array([c["min_scale_x"] for c in chunk_data], dtype=np.float32)
+    chunk_max_scale_x = np.array([c["max_scale_x"] for c in chunk_data], dtype=np.float32)
+    chunk_min_scale_y = np.array([c["min_scale_y"] for c in chunk_data], dtype=np.float32)
+    chunk_max_scale_y = np.array([c["max_scale_y"] for c in chunk_data], dtype=np.float32)
+    chunk_min_scale_z = np.array([c["min_scale_z"] for c in chunk_data], dtype=np.float32)
+    chunk_max_scale_z = np.array([c["max_scale_z"] for c in chunk_data], dtype=np.float32)
+    
+    chunk_min_r = np.array([c["min_r"] for c in chunk_data], dtype=np.float32)
+    chunk_max_r = np.array([c["max_r"] for c in chunk_data], dtype=np.float32)
+    chunk_min_g = np.array([c["min_g"] for c in chunk_data], dtype=np.float32)
+    chunk_max_g = np.array([c["max_g"] for c in chunk_data], dtype=np.float32)
+    chunk_min_b = np.array([c["min_b"] for c in chunk_data], dtype=np.float32)
+    chunk_max_b = np.array([c["max_b"] for c in chunk_data], dtype=np.float32)
+    
+    # Unpack position (10-10-10-2 format: x, y, z packed into 32 bits)
+    pos_x_norm = ((packed_pos >> 0) & 0x3FF).astype(np.float32) / 1023.0
+    pos_y_norm = ((packed_pos >> 10) & 0x3FF).astype(np.float32) / 1023.0
+    pos_z_norm = ((packed_pos >> 20) & 0x3FF).astype(np.float32) / 1023.0
+    
+    # Denormalize using chunk bounds
+    ci = chunk_indices
+    pos_x = chunk_min_x[ci] + pos_x_norm * (chunk_max_x[ci] - chunk_min_x[ci])
+    pos_y = chunk_min_y[ci] + pos_y_norm * (chunk_max_y[ci] - chunk_min_y[ci])
+    pos_z = chunk_min_z[ci] + pos_z_norm * (chunk_max_z[ci] - chunk_min_z[ci])
+    
+    positions = torch.tensor(np.stack([pos_x, pos_y, pos_z], axis=1), dtype=torch.float32, device=device)
+    
+    # Unpack rotation (8-8-8-8 format: quaternion components)
+    rot_x = ((packed_rot >> 0) & 0xFF).astype(np.float32) / 127.5 - 1.0
+    rot_y = ((packed_rot >> 8) & 0xFF).astype(np.float32) / 127.5 - 1.0
+    rot_z = ((packed_rot >> 16) & 0xFF).astype(np.float32) / 127.5 - 1.0
+    rot_w = ((packed_rot >> 24) & 0xFF).astype(np.float32) / 127.5 - 1.0
+    
+    quats = torch.tensor(np.stack([rot_x, rot_y, rot_z, rot_w], axis=1), dtype=torch.float32, device=device)
+    quat_norm = torch.norm(quats, dim=1, keepdim=True) + 1e-8
+    quats = quats / quat_norm
+    
+    # Unpack scale (10-10-10-2 format)
+    scale_x_norm = ((packed_scale >> 0) & 0x3FF).astype(np.float32) / 1023.0
+    scale_y_norm = ((packed_scale >> 10) & 0x3FF).astype(np.float32) / 1023.0
+    scale_z_norm = ((packed_scale >> 20) & 0x3FF).astype(np.float32) / 1023.0
+    
+    # Denormalize scales using chunk bounds (these are in log space)
+    scale_x = chunk_min_scale_x[ci] + scale_x_norm * (chunk_max_scale_x[ci] - chunk_min_scale_x[ci])
+    scale_y = chunk_min_scale_y[ci] + scale_y_norm * (chunk_max_scale_y[ci] - chunk_min_scale_y[ci])
+    scale_z = chunk_min_scale_z[ci] + scale_z_norm * (chunk_max_scale_z[ci] - chunk_min_scale_z[ci])
+    
+    # Convert from log scale
+    scales = torch.tensor(np.stack([scale_x, scale_y, scale_z], axis=1), dtype=torch.float32, device=device)
+    scales = torch.exp(scales)
+    
+    # Unpack color (8-8-8-8 format: r, g, b, opacity)
+    color_r = ((packed_color >> 0) & 0xFF).astype(np.float32) / 255.0
+    color_g = ((packed_color >> 8) & 0xFF).astype(np.float32) / 255.0
+    color_b = ((packed_color >> 16) & 0xFF).astype(np.float32) / 255.0
+    opacity = ((packed_color >> 24) & 0xFF).astype(np.float32) / 255.0
+    
+    # Denormalize colors using chunk bounds
+    color_r = chunk_min_r[ci] + color_r * (chunk_max_r[ci] - chunk_min_r[ci])
+    color_g = chunk_min_g[ci] + color_g * (chunk_max_g[ci] - chunk_min_g[ci])
+    color_b = chunk_min_b[ci] + color_b * (chunk_max_b[ci] - chunk_min_b[ci])
+    
+    colors = torch.tensor(np.stack([color_r, color_g, color_b], axis=1), dtype=torch.float32, device=device)
+    opacities = torch.tensor(opacity, dtype=torch.float32, device=device)
+    
+    print(f"[INFO] Unpacked {n_gaussians} gaussians from {n_chunks} chunks")
+    
+    return positions, scales, colors, quats, opacities
+
+
+def _load_chunk_format(chunk_data, device):
+    """Load data from chunk-only format (uses chunk centers as gaussians)."""
+    positions = []
+    scales = []
+    colors = []
+    
+    for c in chunk_data:
+        center = [
+            0.5 * (c["min_x"] + c["max_x"]),
+            0.5 * (c["min_y"] + c["max_y"]),
+            0.5 * (c["min_z"] + c["max_z"]),
+        ]
+        # Use chunk extent as scale (larger for visibility)
+        scale = [
+            0.25 * abs(c["max_x"] - c["min_x"]),
+            0.25 * abs(c["max_y"] - c["min_y"]),
+            0.25 * abs(c["max_z"] - c["min_z"]),
+        ]
+        color = [
+            0.5 * (c["min_r"] + c["max_r"]),
+            0.5 * (c["min_g"] + c["max_g"]),
+            0.5 * (c["min_b"] + c["max_b"]),
+        ]
+        
+        positions.append(center)
+        scales.append(scale)
+        colors.append(color)
+    
+    positions = torch.tensor(positions, dtype=torch.float32, device=device)
+    scales = torch.tensor(scales, dtype=torch.float32, device=device)
+    colors = torch.tensor(colors, dtype=torch.float32, device=device)
+    opacities = torch.ones(len(positions), dtype=torch.float32, device=device) * 0.95
+    
+    # Identity quaternion
+    quats = torch.zeros((len(positions), 4), dtype=torch.float32, device=device)
+    quats[:, 3] = 1.0
+    
+    return positions, scales, colors, quats, opacities
+
+
 class GaussianScene:
     def __init__(self, means, quats, scales, colors, opacities):
         self.means = means
@@ -28,44 +163,28 @@ def load_gaussian_scene(path: str, device: str = "cuda") -> GaussianScene:
     # Debug: print available elements and their fields
     print(f"[INFO] PLY elements: {list(ply.elements)}")
     
-    # Try 'chunk' format first (usually contains unpacked data)
-    if "chunk" in ply:
-        chunk = ply["chunk"].data
-        print(f"[INFO] Using 'chunk' format with {len(chunk)} chunks")
+    # Check for packed format with chunk metadata (SuperSplat format)
+    if "chunk" in ply and "vertex" in ply:
+        vertex_data = ply["vertex"].data
+        chunk_data = ply["chunk"].data
         
-        positions = []
-        scales = []
-        colors = []
-        
-        for c in chunk:
-            center = [
-                0.5 * (c["min_x"] + c["max_x"]),
-                0.5 * (c["min_y"] + c["max_y"]),
-                0.5 * (c["min_z"] + c["max_z"]),
-            ]
-            scale = [
-                0.5 * (c["min_scale_x"] + c["max_scale_x"]),
-                0.5 * (c["min_scale_y"] + c["max_scale_y"]),
-                0.5 * (c["min_scale_z"] + c["max_scale_z"]),
-            ]
-            color = [
-                0.5 * (c["min_r"] + c["max_r"]),
-                0.5 * (c["min_g"] + c["max_g"]),
-                0.5 * (c["min_b"] + c["max_b"]),
-            ]
+        if "packed_position" in vertex_data.dtype.names:
+            print(f"[INFO] Using packed SuperSplat format with {len(vertex_data)} gaussians and {len(chunk_data)} chunks")
             
-            positions.append(center)
-            scales.append(scale)
-            colors.append(color)
-        
-        positions = torch.tensor(positions, dtype=torch.float32, device=device)
-        scales = torch.tensor(scales, dtype=torch.float32, device=device)
-        colors = torch.tensor(colors, dtype=torch.float32, device=device)
-        opacities = torch.ones(len(positions), dtype=torch.float32, device=device) * 0.9
-        
-        # Identity quaternion
-        quats = torch.zeros((len(positions), 4), dtype=torch.float32, device=device)
-        quats[:, 3] = 1.0
+            # Unpack the data using chunk metadata
+            positions, scales, colors, quats, opacities = _unpack_supersplat_data(
+                vertex_data, chunk_data, device
+            )
+        else:
+            # Fallback to chunk-only format
+            print(f"[INFO] Using 'chunk' format with {len(chunk_data)} chunks")
+            positions, scales, colors, quats, opacities = _load_chunk_format(chunk_data, device)
+    
+    # Try 'chunk' format only
+    elif "chunk" in ply:
+        chunk_data = ply["chunk"].data
+        print(f"[INFO] Using 'chunk' format with {len(chunk_data)} chunks")
+        positions, scales, colors, quats, opacities = _load_chunk_format(chunk_data, device)
     
     # Try standard Gaussian Splatting format (unpacked vertex data)
     elif "vertex" in ply:
@@ -152,19 +271,6 @@ def load_gaussian_scene(path: str, device: str = "cuda") -> GaussianScene:
             # Default white color
             print(f"[WARNING] No color fields found, using default white color")
             colors = torch.ones((len(positions), 3), dtype=torch.float32, device=device)
-    
-    # Try packed vertex format (if chunk was not available)
-    elif "vertex" in ply and "packed_position" in ply["vertex"].data.dtype.names:
-        print(f"[INFO] Attempting to unpack packed vertex data")
-        vertex_data = ply["vertex"].data
-        
-        # For now, raise an error with helpful message
-        # Unpacking requires knowing the exact packing scheme
-        raise ValueError(
-            f"Packed vertex format detected but unpacking not yet implemented. "
-            f"Available packed fields: {ply['vertex'].data.dtype.names}. "
-            f"Please use a PLY file with unpacked data or implement unpacking."
-        )
     
     else:
         raise ValueError(f"Unsupported PLY format. Available elements: {list(ply.elements)}")
