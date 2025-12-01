@@ -173,17 +173,26 @@ def build_camera_path(
     # 2) Pick random free start/goal cells.
     free_indices = torch.nonzero(~occ, as_tuple=False)
     if free_indices.shape[0] < 2:
-        # Extremely dense scene – fall back to orbit around center.
+        # Extremely dense scene – fall back to orbit around center INSIDE the scene.
         from math import pi
 
         center = scene.center
-        extents = scene.bbox_max - scene.bbox_min
-        radius = float(max(extents[0], extents[2]) * 0.6 + 1e-2)
+        bbox_min = scene.bbox_min
+        bbox_max = scene.bbox_max
+        extents = bbox_max - bbox_min
+        
+        # Используем меньший радиус, чтобы камера была ВНУТРИ сцены
+        radius = float(min(extents[0], extents[2]) * 0.4)  # 40% от меньшего размера
         height = (
             cam_y
             if cam_y is not None
-            else float(center[1] + 0.2 * extents[1])
+            else float(center[1])  # На уровне центра по Y
         )
+        
+        # Убедимся, что высота внутри bbox
+        height = max(bbox_min[1].item() + 0.1 * extents[1].item(), 
+                    min(bbox_max[1].item() - 0.1 * extents[1].item(), height))
+        
         up = torch.tensor([0.0, 1.0, 0.0], device=device)
         frames = int(duration_sec * fps)
         views = []
@@ -197,7 +206,12 @@ def build_camera_path(
                 ],
                 device=device,
             )
+            # Убедимся, что eye внутри bbox
+            eye = torch.clamp(eye, bbox_min + 0.05 * extents, bbox_max - 0.05 * extents)
             views.append(look_at(eye, center, up))
+        
+        print(f"[INFO] Using fallback orbit path (dense scene)")
+        print(f"[INFO] Orbit radius: {radius:.3f}, height: {height:.3f}")
         return torch.stack(views)
 
     rng = torch.Generator(device=device).manual_seed(seed)
@@ -232,14 +246,28 @@ def build_camera_path(
     positions = torch.stack(positions, dim=0)  # [F, 3]
 
     # 6) Build view matrices.
-    #    Чтобы гарантировать, что камера всегда "видит" сцену и кадр не будет
-    #    чёрным, смотрим в центр сцены, а не строго вперёд по траектории.
+    #    Камера смотрит в центр сцены, чтобы гарантировать видимость гауссиан.
     up = torch.tensor([0.0, 1.0, 0.0], device=device)
     center = scene.center
+    
+    # Убедимся, что камера находится внутри bounding box сцены
+    bbox_min = scene.bbox_min
+    bbox_max = scene.bbox_max
+    extents = bbox_max - bbox_min
+    
+    # Если позиции камеры выходят за границы, переместим их внутрь
+    positions = torch.clamp(positions, bbox_min + 0.1 * extents, bbox_max - 0.1 * extents)
+    
     view_mats: List[torch.Tensor] = []
     for i in range(total_frames):
         eye = positions[i]
+        # Смотрим в центр сцены, чтобы видеть гауссианы
         target = center
         view_mats.append(look_at(eye, target, up))
-
+    
+    print(f"[INFO] Camera path: {total_frames} frames")
+    print(f"[INFO] Camera position range: [{positions.min(dim=0)[0]}, {positions.max(dim=0)[0]}]")
+    print(f"[INFO] Scene center: {center}")
+    print(f"[INFO] Scene bbox: [{bbox_min}, {bbox_max}]")
+    
     return torch.stack(view_mats, dim=0)

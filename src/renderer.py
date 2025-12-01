@@ -91,6 +91,18 @@ class GsplatRenderer:
         scales = scales.to(self.device)
         opacities = opacities.to(self.device)
         colors = colors.to(self.device)
+        
+        # Debug info
+        print(f"[INFO] Rendering {view_mats.shape[0]} frames")
+        print(f"[INFO] Gaussians: {means.shape[0]}")
+        print(f"[INFO] Means range: [{means.min().item():.3f}, {means.max().item():.3f}]")
+        print(f"[INFO] Scales range: [{scales.min().item():.6f}, {scales.max().item():.6f}]")
+        print(f"[INFO] Opacities range: [{opacities.min().item():.3f}, {opacities.max().item():.3f}]")
+        print(f"[INFO] Colors range: [{colors.min().item():.3f}, {colors.max().item():.3f}]")
+        
+        # Check first camera position
+        first_cam_pos = torch.inverse(view_mats[0])[:3, 3]
+        print(f"[INFO] First camera position: {first_cam_pos}")
 
         writer = imageio.get_writer(out_path, fps=fps)
 
@@ -124,6 +136,15 @@ class GsplatRenderer:
             for b in range(frames.shape[0]):
                 # Convert to uint8 for video writing
                 frame = (frames[b] * 255.0).astype("uint8")
+                
+                # Debug: check if frame is completely black (only on first frame of first batch)
+                if start == 0 and b == 0:
+                    frame_mean = frame.mean()
+                    frame_max = frame.max()
+                    print(f"[INFO] First frame stats: mean={frame_mean:.2f}, max={frame_max}")
+                    if frame_mean < 1.0:
+                        print(f"[WARNING] First frame is very dark (mean={frame_mean:.2f})")
+                
                 writer.append_data(frame)
 
         writer.close()
