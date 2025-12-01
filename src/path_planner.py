@@ -5,23 +5,21 @@ import torch
 from .gaussians import GaussianScene
 
 
-def look_at(eye: torch.Tensor, target: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
-    """Construct a right-handed look-at view matrix (world to camera)."""
-    z_axis = eye - target
-    z_axis = z_axis / (torch.norm(z_axis) + 1e-8)
+def look_at(eye, target, up):
+    # Ensure all tensors are float32
+    eye = eye.float()
+    target = target.float()
+    up = up.float()
 
-    x_axis = torch.cross(up, z_axis, dim=0)
-    x_axis = x_axis / (torch.norm(x_axis) + 1e-8)
-
-    y_axis = torch.cross(z_axis, x_axis, dim=0)
-
-    R = torch.stack([x_axis, y_axis, z_axis], dim=0)
+    z = (eye - target); z /= torch.norm(z) + 1e-8
+    x = torch.cross(up, z, dim=0); x /= torch.norm(x) + 1e-8
+    y = torch.cross(z, x, dim=0)
+    R = torch.stack([x, y, z], dim=0)
     t = -R @ eye
-
-    view = torch.eye(4, device=eye.device, dtype=eye.dtype)
-    view[:3, :3] = R
-    view[:3, 3] = t
+    view = torch.eye(4, device=eye.device, dtype=torch.float32)
+    view[:3, :3] = R; view[:3, 3] = t
     return view
+
 
 
 def generate_orbit_keyframes(
@@ -41,7 +39,8 @@ def generate_orbit_keyframes(
     height = cam_y if cam_y is not None else float(center[1] + orbit_height_factor * extents[1])
 
     rng = torch.Generator().manual_seed(seed)
-    offset_theta = torch.rand(1, generator=rng).to(device).item() * 2.0 * math.pi
+    offset_theta = torch.rand(1, generator=rng, dtype=torch.float32).to(device).item() * 2 * math.pi
+
 
     up = torch.tensor([0.0, 1.0, 0.0], device=device, dtype=torch.float32)
 
@@ -52,7 +51,8 @@ def generate_orbit_keyframes(
             center[0] + radius * math.cos(theta),
             height,
             center[2] + radius * math.sin(theta)
-        ], device=device)
+        ], device=device, dtype=torch.float32)
+
         views.append(look_at(eye, center, up))
 
     return views
