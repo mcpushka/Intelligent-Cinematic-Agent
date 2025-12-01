@@ -105,7 +105,7 @@ def process_scene(
     print(f"\n=== Processing scene: {scene_path} ===")
     scene = load_gaussian_scene(scene_path, device=device)
 
-    # Fix camera logic to prevent black render
+    # Configure simple scene exploration from inside the scene.
     scene_cfg = {}
     auto_configure_camera(scene, scene_cfg)
 
@@ -113,12 +113,13 @@ def process_scene(
         scene,
         normalize=scene_cfg.get("normalize_scene", False),
         cam_y=scene_cfg.get("straight_start_cam_y", None),
-        seed=scene_cfg.get("random_seed", 42)
+        seed=scene_cfg.get("random_seed", 42),
     )
 
+    # Plan a path-inside-scene tour with obstacle avoidance (handled in path_planner).
     exploration_result = explorer.plan_panorama_tour(
         duration_sec=duration,
-        fps=fps
+        fps=fps,
     )
 
     view_mats = exploration_result.view_mats
