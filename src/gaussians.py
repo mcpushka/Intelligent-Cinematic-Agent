@@ -3,22 +3,39 @@ import torch
 from plyfile import PlyData
 
 
-def _unpack_supersplat_data(vertex_data, chunk_data, device):
-    """Unpack SuperSplat packed format using chunk metadata for ranges."""
+def _unpack_supersplat_data(vertex_data, chunk_data, device, max_gaussians=500000):
+    """Unpack SuperSplat packed format using chunk metadata for ranges.
+    
+    Args:
+        max_gaussians: Maximum number of gaussians to load (downsample if more).
+                       Set to None to load all (may cause OOM on smaller GPUs).
+    """
     n_gaussians = len(vertex_data)
     n_chunks = len(chunk_data)
     
-    # Get packed data as uint32
-    packed_pos = np.array(vertex_data["packed_position"], dtype=np.uint32)
-    packed_rot = np.array(vertex_data["packed_rotation"], dtype=np.uint32)
-    packed_scale = np.array(vertex_data["packed_scale"], dtype=np.uint32)
-    packed_color = np.array(vertex_data["packed_color"], dtype=np.uint32)
+    # Downsample if too many gaussians (to avoid GPU OOM)
+    if max_gaussians is not None and n_gaussians > max_gaussians:
+        step = n_gaussians // max_gaussians
+        indices = np.arange(0, n_gaussians, step)[:max_gaussians]
+        print(f"[INFO] Downsampling from {n_gaussians} to {len(indices)} gaussians (step={step})")
+    else:
+        indices = np.arange(n_gaussians)
     
-    # Determine which chunk each gaussian belongs to
-    gaussians_per_chunk = n_gaussians // n_chunks
-    chunk_indices = np.repeat(np.arange(n_chunks), gaussians_per_chunk)
-    if len(chunk_indices) < n_gaussians:
-        chunk_indices = np.concatenate([chunk_indices, np.full(n_gaussians - len(chunk_indices), n_chunks - 1)])
+    # Get packed data as uint32 (with downsampling)
+    packed_pos = np.array(vertex_data["packed_position"], dtype=np.uint32)[indices]
+    packed_rot = np.array(vertex_data["packed_rotation"], dtype=np.uint32)[indices]
+    packed_scale = np.array(vertex_data["packed_scale"], dtype=np.uint32)[indices]
+    packed_color = np.array(vertex_data["packed_color"], dtype=np.uint32)[indices]
+    
+    n_gaussians = len(indices)  # Update count after downsampling
+    
+    # Determine which chunk each gaussian belongs to (based on original indices)
+    original_n_gaussians = len(vertex_data)
+    gaussians_per_chunk = original_n_gaussians // n_chunks
+    all_chunk_indices = np.repeat(np.arange(n_chunks), gaussians_per_chunk)
+    if len(all_chunk_indices) < original_n_gaussians:
+        all_chunk_indices = np.concatenate([all_chunk_indices, np.full(original_n_gaussians - len(all_chunk_indices), n_chunks - 1)])
+    chunk_indices = all_chunk_indices[indices]  # Apply same downsampling
     
     # Build chunk bounds arrays
     chunk_min_x = np.array([c["min_x"] for c in chunk_data], dtype=np.float32)
