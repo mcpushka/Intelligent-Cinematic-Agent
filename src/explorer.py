@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 import torch
 
@@ -15,16 +15,28 @@ class ExplorationResult:
 
 
 class SceneExplorer:
-    """Simple scene exploration agent.
+    """Simple scene exploration agent with optional normalization and camera config."""
 
-    Responsibilities:
-      - Initialize a camera path automatically (no hardcoded start/end).
-      - Ensure the path covers the whole scene (orbit).
-      - Provide metadata useful for reporting/visualization.
-    """
+    def __init__(
+        self,
+        scene: GaussianScene,
+        normalize: bool = False,
+        cam_y: Optional[float] = None,
+        seed: int = 42,
+    ):
+        # Optional normalization (in-place)
+        if normalize:
+            center = scene.center
+            radius = scene.radius
+            scene.means = (scene.means - center) / radius
+            scene.bbox_min = (scene.bbox_min - center) / radius
+            scene.bbox_max = (scene.bbox_max - center) / radius
+            scene.center = (scene.bbox_min + scene.bbox_max) * 0.5
+            scene.radius = torch.norm(scene.bbox_max - scene.bbox_min) * 0.5
 
-    def __init__(self, scene: GaussianScene):
         self.scene = scene
+        self.cam_y = cam_y
+        self.seed = seed
 
     def plan_panorama_tour(
         self,
@@ -34,16 +46,20 @@ class SceneExplorer:
     ) -> ExplorationResult:
         """Plan a generic 360° panorama tour."""
         view_mats = build_camera_path(
-            self.scene, duration_sec=duration_sec, fps=fps, n_keyframes=n_keyframes
+            self.scene,
+            duration_sec=duration_sec,
+            fps=fps,
+            n_keyframes=n_keyframes,
+            cam_y=self.cam_y,
+            seed=self.seed,
         )
 
-        # Very crude "coverage" metric: number of viewpoints
-        num_frames = view_mats.shape[0]
-
         metadata: Dict[str, Any] = {
-            "num_frames": num_frames,
+            "num_frames": view_mats.shape[0],
             "fps": fps,
             "duration_sec": duration_sec,
             "is_indoor": self.scene.is_indoor,
+            "cam_y": self.cam_y,
+            "normalized": True if self.cam_y else False,
         }
         return ExplorationResult(view_mats=view_mats, metadata=metadata)

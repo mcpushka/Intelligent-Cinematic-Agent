@@ -107,13 +107,20 @@ def process_scene(
     scene_cfg = {}
     auto_configure_camera(scene, scene_cfg)
 
-    explorer = SceneExplorer(scene, config=scene_cfg)
+    explorer = SceneExplorer(
+        scene,
+        normalize=scene_cfg.get("normalize_scene", False),
+        cam_y=scene_cfg.get("straight_start_cam_y", None),
+        seed=scene_cfg.get("random_seed", 42)
+    )
 
     exploration_result = explorer.plan_panorama_tour(
-        duration_sec=duration, fps=fps
+        duration_sec=duration,
+        fps=fps
     )
 
     view_mats = exploration_result.view_mats
+
 
     scene_name = os.path.splitext(os.path.basename(scene_path))[0]
     scene_output_dir = os.path.join(output_dir, scene_name)
