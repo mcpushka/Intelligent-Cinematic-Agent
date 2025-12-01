@@ -42,9 +42,10 @@ def generate_orbit_keyframes(
     height = cam_y if cam_y is not None else float(center[1] + orbit_height_factor * extents[1])
 
     # Add random start angle (for variation)
-    rng = torch.Generator(device=device)
+    rng = torch.Generator()
     rng.manual_seed(seed)
-    offset_theta = torch.rand(1, generator=rng).item() * 2.0 * math.pi
+    offset_theta = torch.rand(1, generator=rng).to(device).item() * 2.0 * math.pi
+
 
     up = torch.tensor([0.0, 1.0, 0.0], device=device)
 
