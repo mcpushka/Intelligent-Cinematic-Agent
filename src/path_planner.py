@@ -181,15 +181,13 @@ def build_camera_path(
         bbox_max = scene.bbox_max
         extents = bbox_max - bbox_min
         
-        # Используем меньший радиус, чтобы камера была ВНУТРИ сцены
-        radius = float(min(extents[0], extents[2]) * 0.4)  # 40% от меньшего размера
+        radius = float(min(extents[0], extents[2]) * 0.4)  
         height = (
             cam_y
             if cam_y is not None
-            else float(center[1])  # На уровне центра по Y
+            else float(center[1]) 
         )
         
-        # Убедимся, что высота внутри bbox
         height = max(bbox_min[1].item() + 0.1 * extents[1].item(), 
                     min(bbox_max[1].item() - 0.1 * extents[1].item(), height))
         
@@ -206,7 +204,6 @@ def build_camera_path(
                 ],
                 device=device,
             )
-            # Убедимся, что eye внутри bbox
             eye = torch.clamp(eye, bbox_min + 0.05 * extents, bbox_max - 0.05 * extents)
             views.append(look_at(eye, center, up))
         
@@ -246,22 +243,17 @@ def build_camera_path(
     positions = torch.stack(positions, dim=0)  # [F, 3]
 
     # 6) Build view matrices.
-    #    Камера смотрит в центр сцены, чтобы гарантировать видимость гауссиан.
     up = torch.tensor([0.0, 1.0, 0.0], device=device)
     center = scene.center
-    
-    # Убедимся, что камера находится внутри bounding box сцены
     bbox_min = scene.bbox_min
     bbox_max = scene.bbox_max
     extents = bbox_max - bbox_min
     
-    # Если позиции камеры выходят за границы, переместим их внутрь
     positions = torch.clamp(positions, bbox_min + 0.1 * extents, bbox_max - 0.1 * extents)
     
     view_mats: List[torch.Tensor] = []
     for i in range(total_frames):
         eye = positions[i]
-        # Смотрим в центр сцены, чтобы видеть гауссианы
         target = center
         view_mats.append(look_at(eye, target, up))
     
