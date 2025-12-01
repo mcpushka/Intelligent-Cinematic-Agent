@@ -89,7 +89,7 @@ def auto_configure_camera(scene, scene_cfg):
 
     scene_cfg["straight_path_waypoints_xyz"] = [start, end]
     scene_cfg["straight_start_cam_y"] = cam_y
-    scene_cfg["normalize_scene"] = True
+    scene_cfg["normalize_scene"] = False  # Don't normalize - work in original coordinates
     scene_cfg["random_seed"] = 42
 
 def process_scene(

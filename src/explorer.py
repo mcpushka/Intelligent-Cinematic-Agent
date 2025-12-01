@@ -31,6 +31,9 @@ class SceneExplorer:
             scene.means = (scene.means - center) / radius
             scene.bbox_min = (scene.bbox_min - center) / radius
             scene.bbox_max = (scene.bbox_max - center) / radius
+            
+            # Also normalize scales to match the new coordinate system
+            scene.scales = scene.scales / radius
 
             scene.center = (scene.bbox_min + scene.bbox_max) * 0.5
             scene.radius = torch.norm(scene.bbox_max - scene.bbox_min) * 0.5
