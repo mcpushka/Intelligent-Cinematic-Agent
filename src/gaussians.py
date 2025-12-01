@@ -28,8 +28,47 @@ def load_gaussian_scene(path: str, device: str = "cuda") -> GaussianScene:
     # Debug: print available elements and their fields
     print(f"[INFO] PLY elements: {list(ply.elements)}")
     
-    # Try standard Gaussian Splatting format first
-    if "vertex" in ply:
+    # Try 'chunk' format first (usually contains unpacked data)
+    if "chunk" in ply:
+        chunk = ply["chunk"].data
+        print(f"[INFO] Using 'chunk' format with {len(chunk)} chunks")
+        
+        positions = []
+        scales = []
+        colors = []
+        
+        for c in chunk:
+            center = [
+                0.5 * (c["min_x"] + c["max_x"]),
+                0.5 * (c["min_y"] + c["max_y"]),
+                0.5 * (c["min_z"] + c["max_z"]),
+            ]
+            scale = [
+                0.5 * (c["min_scale_x"] + c["max_scale_x"]),
+                0.5 * (c["min_scale_y"] + c["max_scale_y"]),
+                0.5 * (c["min_scale_z"] + c["max_scale_z"]),
+            ]
+            color = [
+                0.5 * (c["min_r"] + c["max_r"]),
+                0.5 * (c["min_g"] + c["max_g"]),
+                0.5 * (c["min_b"] + c["max_b"]),
+            ]
+            
+            positions.append(center)
+            scales.append(scale)
+            colors.append(color)
+        
+        positions = torch.tensor(positions, dtype=torch.float32, device=device)
+        scales = torch.tensor(scales, dtype=torch.float32, device=device)
+        colors = torch.tensor(colors, dtype=torch.float32, device=device)
+        opacities = torch.ones(len(positions), dtype=torch.float32, device=device) * 0.9
+        
+        # Identity quaternion
+        quats = torch.zeros((len(positions), 4), dtype=torch.float32, device=device)
+        quats[:, 3] = 1.0
+    
+    # Try standard Gaussian Splatting format (unpacked vertex data)
+    elif "vertex" in ply:
         vertex_data = ply["vertex"].data
         available_fields = vertex_data.dtype.names
         print(f"[INFO] Available vertex fields: {available_fields}")
@@ -114,43 +153,19 @@ def load_gaussian_scene(path: str, device: str = "cuda") -> GaussianScene:
             print(f"[WARNING] No color fields found, using default white color")
             colors = torch.ones((len(positions), 3), dtype=torch.float32, device=device)
     
-    # Try custom 'chunk' format
-    elif "chunk" in ply:
-        chunk = ply["chunk"].data
+    # Try packed vertex format (if chunk was not available)
+    elif "vertex" in ply and "packed_position" in ply["vertex"].data.dtype.names:
+        print(f"[INFO] Attempting to unpack packed vertex data")
+        vertex_data = ply["vertex"].data
         
-        positions = []
-        scales = []
-        colors = []
-        
-        for c in chunk:
-            center = [
-                0.5 * (c["min_x"] + c["max_x"]),
-                0.5 * (c["min_y"] + c["max_y"]),
-                0.5 * (c["min_z"] + c["max_z"]),
-            ]
-            scale = [
-                0.5 * (c["min_scale_x"] + c["max_scale_x"]),
-                0.5 * (c["min_scale_y"] + c["max_scale_y"]),
-                0.5 * (c["min_scale_z"] + c["max_scale_z"]),
-            ]
-            color = [
-                0.5 * (c["min_r"] + c["max_r"]),
-                0.5 * (c["min_g"] + c["max_g"]),
-                0.5 * (c["min_b"] + c["max_b"]),
-            ]
-            
-            positions.append(center)
-            scales.append(scale)
-            colors.append(color)
-        
-        positions = torch.tensor(positions, dtype=torch.float32, device=device)
-        scales = torch.tensor(scales, dtype=torch.float32, device=device)
-        colors = torch.tensor(colors, dtype=torch.float32, device=device)
-        opacities = torch.ones(len(positions), dtype=torch.float32, device=device) * 0.9
-        
-        # Identity quaternion
-        quats = torch.zeros((len(positions), 4), dtype=torch.float32, device=device)
-        quats[:, 3] = 1.0
+        # For now, raise an error with helpful message
+        # Unpacking requires knowing the exact packing scheme
+        raise ValueError(
+            f"Packed vertex format detected but unpacking not yet implemented. "
+            f"Available packed fields: {ply['vertex'].data.dtype.names}. "
+            f"Please use a PLY file with unpacked data or implement unpacking."
+        )
+    
     else:
         raise ValueError(f"Unsupported PLY format. Available elements: {list(ply.elements)}")
     
