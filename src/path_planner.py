@@ -47,7 +47,8 @@ def generate_orbit_keyframes(
     offset_theta = torch.rand(1, generator=rng).to(device).item() * 2.0 * math.pi
 
 
-    up = torch.tensor([0.0, 1.0, 0.0], device=device)
+    up = torch.tensor([0.0, 1.0, 0.0], device=device, dtype=torch.float32)
+
 
     keyframes = []
     for i in range(n_keyframes):
@@ -59,7 +60,9 @@ def generate_orbit_keyframes(
                 center[2] + radius * math.sin(theta),
             ],
             device=device,
+            dtype=torch.float32,
         )
+
         view = look_at(eye, center, up)
         keyframes.append(view)
     return keyframes
@@ -89,7 +92,8 @@ def resample_catmull_rom(
     for i in range(num_samples):
         u = (i / num_samples) * K
         idx = int(math.floor(u))
-        t = torch.tensor(u - idx, device=device)
+        t = torch.tensor(u - idx, device=device, dtype=torch.float32)
+
         p0, p1, p2, p3 = extended[idx:idx + 4]
         samples.append(catmull_rom(p0, p1, p2, p3, t))
     return torch.stack(samples)
@@ -119,7 +123,8 @@ def build_camera_path(
     num_frames = int(duration_sec * fps)
     positions = resample_catmull_rom(key_positions, num_frames, loop=True)
 
-    up = torch.tensor([0.0, 1.0, 0.0], device=scene.means.device)
+    up = torch.tensor([0.0, 1.0, 0.0], device=scene.means.device, dtype=torch.float32)
+
     center = scene.center
 
     return torch.stack([look_at(pos, center, up) for pos in positions])
