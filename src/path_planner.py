@@ -1,30 +1,18 @@
 import math
-from typing import List, Tuple
+from typing import List, Optional
 
 import torch
-
 from .gaussians import GaussianScene
 
 
 def look_at(eye: torch.Tensor, target: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
-    """Build a standard right-handed look-at view matrix.
-
-    eye, target, up are 3D vectors on the same device.
-    Returns 4x4 matrix that transforms world -> camera coordinates.
-    """
-    # Forward axis (camera looks along -z)
     z_axis = eye - target
     z_axis = z_axis / (torch.norm(z_axis) + 1e-8)
-
-    # Right axis
-    # IMPORTANT: specify dim=0 to avoid deprecation warning.
     x_axis = torch.cross(up, z_axis, dim=0)
     x_axis = x_axis / (torch.norm(x_axis) + 1e-8)
-
-    # True up axis
     y_axis = torch.cross(z_axis, x_axis, dim=0)
 
-    R = torch.stack([x_axis, y_axis, z_axis], dim=0)  # 3x3
+    R = torch.stack([x_axis, y_axis, z_axis], dim=0)
     t = -R @ eye
 
     view = torch.eye(4, device=eye.device, dtype=eye.dtype)
@@ -38,32 +26,31 @@ def generate_orbit_keyframes(
     n_keyframes: int = 120,
     orbit_height_factor: float = 0.2,
     orbit_radius_scale: float = 1.2,
+    cam_y: Optional[float] = None,
+    seed: int = 42,
 ) -> List[torch.Tensor]:
-    """Generate keyframe view matrices that orbit around scene center.
-
-    This is our basic "exploration strategy":
-      - camera flies around the whole scene,
-      - stays outside the bounding volume (obstacle avoidance),
-      - keeps the scene center in view (cinematic framing).
-    """
     device = scene.means.device
     center = scene.center
     bbox_min = scene.bbox_min
     bbox_max = scene.bbox_max
     extents = bbox_max - bbox_min
 
-    # Horizontal radius: a bit larger than max horizontal distance from center
     horizontal_extent = float(max(extents[0], extents[2]))
     radius = orbit_radius_scale * horizontal_extent
 
-    # Height: slightly above the "middle", to avoid being inside the geometry
-    height = float(center[1] + orbit_height_factor * extents[1])
+    # height: from cam_y or calculated
+    height = cam_y if cam_y is not None else float(center[1] + orbit_height_factor * extents[1])
+
+    # Add random start angle (for variation)
+    rng = torch.Generator(device=device)
+    rng.manual_seed(seed)
+    offset_theta = torch.rand(1, generator=rng).item() * 2.0 * math.pi
 
     up = torch.tensor([0.0, 1.0, 0.0], device=device)
 
-    keyframes: List[torch.Tensor] = []
+    keyframes = []
     for i in range(n_keyframes):
-        theta = 2.0 * math.pi * (i / n_keyframes)
+        theta = offset_theta + 2.0 * math.pi * (i / n_keyframes)
         eye = torch.tensor(
             [
                 center[0] + radius * math.cos(theta),
@@ -82,38 +69,19 @@ def resample_catmull_rom(
     num_samples: int,
     loop: bool = True,
 ) -> torch.Tensor:
-    """Catmull-Rom interpolation for camera positions.
-
-    Args:
-        points: [K, 3] keyframe positions.
-        num_samples: number of positions to sample along the loop.
-        loop: if True, treat points as closed loop.
-
-    Returns:
-        [num_samples, 3] interpolated positions.
-    """
     device = points.device
     K = points.shape[0]
 
     if loop:
-        # Wrap indices for closed curve
-        extended = torch.cat(
-            [points[-1:].clone(), points, points[:2].clone()], dim=0
-        )  # [K+3, 3]
+        extended = torch.cat([points[-1:], points, points[:2]], dim=0)
     else:
-        extended = torch.cat(
-            [points[:1].clone(), points, points[-1:].clone(), points[-1:].clone()],
-            dim=0,
-        )
+        extended = torch.cat([points[:1], points, points[-1:], points[-1:]], dim=0)
 
     def catmull_rom(p0, p1, p2, p3, t):
         t2 = t * t
         t3 = t2 * t
         return 0.5 * (
-            (2.0 * p1)
-            + (-p0 + p2) * t
-            + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
-            + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+            (2.0 * p1) + (-p0 + p2) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
         )
 
     samples = []
@@ -121,14 +89,9 @@ def resample_catmull_rom(
         u = (i / num_samples) * K
         idx = int(math.floor(u))
         t = torch.tensor(u - idx, device=device)
-        idx0 = idx
-        p0 = extended[idx0 + 0]
-        p1 = extended[idx0 + 1]
-        p2 = extended[idx0 + 2]
-        p3 = extended[idx0 + 3]
-        pos = catmull_rom(p0, p1, p2, p3, t)
-        samples.append(pos)
-    return torch.stack(samples, dim=0)
+        p0, p1, p2, p3 = extended[idx:idx + 4]
+        samples.append(catmull_rom(p0, p1, p2, p3, t))
+    return torch.stack(samples)
 
 
 def build_camera_path(
@@ -136,39 +99,26 @@ def build_camera_path(
     duration_sec: float,
     fps: int = 24,
     n_keyframes: int = 120,
+    cam_y: Optional[float] = None,
+    seed: int = 42,
 ) -> torch.Tensor:
-    """High-level helper: build a smooth camera path for Video 1.
+    keyframes = generate_orbit_keyframes(
+        scene,
+        n_keyframes=n_keyframes,
+        cam_y=cam_y,
+        seed=seed,
+    )
 
-    Steps:
-      1. Create orbit keyframes (exploration + coverage).
-      2. Resample with Catmull-Rom to get smooth motion.
-      3. Create view matrices along the path (world-to-camera).
-    """
-    device = scene.means.device
-    keyframes = generate_orbit_keyframes(scene, n_keyframes=n_keyframes)
-
-    # Extract keyframe positions from view matrices (invert to get camera pose)
     key_positions = []
     for view in keyframes:
-        # Inverse of view matrix gives camera-to-world transform.
         cam_to_world = torch.inverse(view)
-        cam_pos = cam_to_world[:3, 3]
-        key_positions.append(cam_pos)
-    key_positions = torch.stack(key_positions, dim=0)  # [K, 3]
+        key_positions.append(cam_to_world[:3, 3])
+    key_positions = torch.stack(key_positions)
 
     num_frames = int(duration_sec * fps)
+    positions = resample_catmull_rom(key_positions, num_frames, loop=True)
 
-    # Smooth path via Catmull-Rom
-    positions = resample_catmull_rom(key_positions, num_frames, loop=True)  # [F, 3]
-
-    # Build view matrices along path (always look at scene center)
-    up = torch.tensor([0.0, 1.0, 0.0], device=device)
+    up = torch.tensor([0.0, 1.0, 0.0], device=scene.means.device)
     center = scene.center
 
-    view_mats = []
-    for i in range(num_frames):
-        eye = positions[i]
-        view = look_at(eye, center, up)
-        view_mats.append(view)
-
-    return torch.stack(view_mats, dim=0)  # [F, 4, 4]
+    return torch.stack([look_at(pos, center, up) for pos in positions])
